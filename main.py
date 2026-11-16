@@ -646,7 +646,8 @@ def main():
             "finished",
             successful,
             failures,
-            cancel_event.is_set()
+            cancel_event.is_set(),
+            folder
         ))
 
 
@@ -710,7 +711,7 @@ def main():
                     )
 
                 elif message[0] == "finished":
-                    _, successful, failures, cancelled = message
+                    _, successful, failures, cancelled, folder = message
 
                     conversion_running = False
 
@@ -745,7 +746,8 @@ def main():
                         "Conversion report",
                         summary
                     )
-
+                    if successful > 0:
+                        open_output_folder(folder)
                     return
 
         except queue.Empty:
@@ -765,9 +767,9 @@ def main():
             )
 
 
-    def open_output_folder():
+    def open_output_folder(folder=None):
 
-        folder = output_folder.get().strip()
+        folder = folder or output_folder.get().strip()
 
         if not folder:
             messagebox.showwarning(
