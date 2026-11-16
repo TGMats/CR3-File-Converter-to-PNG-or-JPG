@@ -5,6 +5,8 @@ import sys
 import json
 from pathlib import Path
 from converter import convert_cr3
+import rawpy
+from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from tkinterdnd2 import DND_FILES, TkinterDnD
 
@@ -121,6 +123,7 @@ def main():
     conversion_queue = queue.Queue()
     cancel_event = threading.Event()
     conversion_running = False
+    conversion_start_time = None
     admin_unlocked = False
 
     output_folder = tk.StringVar(
@@ -161,6 +164,14 @@ def main():
         text="Convert Canon RAW photos to JPG or PNG"
     )
     subtitle.pack(pady=(0, 20))
+    
+    footer = ttk.Label(
+        root,
+        text="Made by Tomás Matias © 2026",
+        font=("Segoe UI", 8),
+        foreground="gray"
+    )
+    footer.pack(side=tk.BOTTOM, pady=(0, 8))
 
     # Create tabs
     notebook = ttk.Notebook(root)
@@ -233,9 +244,178 @@ def main():
             command=unlock_admin
         )
 
+    
+    def show_about():
+
+        about_window = tk.Toplevel(root)
+        about_window.title("About CR3Converter")
+        about_window.geometry("380x300")
+        about_window.resizable(False, False)
+        about_window.transient(root)
+
+        about_title = ttk.Label(
+            about_window,
+            text="CR3Converter",
+            font=("Segoe UI", 20, "bold")
+        )
+        about_title.pack(pady=(25, 5))
+
+        version_label = ttk.Label(
+            about_window,
+            text="Version 1.0.0",
+            font=("Segoe UI", 9)
+        )
+        version_label.pack(pady=5)
+
+        description_label = ttk.Label(
+            about_window,
+            text="A desktop application for converting\nCanon RAW (CR3) photos into JPG or PNG.",
+            justify=tk.CENTER
+        )
+        description_label.pack(pady=15)
+
+        developer_label = ttk.Label(
+            about_window,
+            text="Made by Tomás Matias © 2026",
+            font=("Segoe UI", 9, "bold")
+        )
+        developer_label.pack(pady=5)
+        
+        github_label = ttk.Label(
+            about_window,
+            text="GitHub: TGMats/CR3-File-Converter",
+            foreground="blue",
+            cursor="hand2"
+        )
+        github_label.pack(pady=5)
+
+        github_label.bind(
+            "<Button-1>",
+            lambda event: __import__("webbrowser").open(
+                "https://github.com/TGMats/CR3-File-Converter-to-PNG-or-JPG"
+            )
+        )
+
+        close_button = ttk.Button(
+            about_window,
+            text="Close",
+            command=about_window.destroy
+        )
+        close_button.pack(pady=20)
+
     # --------------------------------------------------
     # Converter tab functions
     # --------------------------------------------------
+    
+    
+    preview_original_image = None
+    zoom_enabled = tk.BooleanVar(value=True)
+
+    def show_image_preview(event=None):
+        """Display a thumbnail of the selected CR3 image."""
+
+        nonlocal preview_original_image
+
+        selected_indices = file_list.curselection()
+
+        if not selected_indices:
+            preview_original_image = None
+            preview_label.config(
+                image="",
+                text="Select a photo to preview"
+            )
+            preview_label.image = None
+            return
+
+        sorted_files = sorted(
+            selected_files,
+            key=lambda path: (path.name.lower(), str(path).lower())
+        )
+
+        selected_path = sorted_files[selected_indices[0]]
+
+        try:
+            with rawpy.imread(str(selected_path)) as raw:
+                rgb_image = raw.postprocess(
+                    use_camera_wb=True,
+                    output_bps=8,
+                    half_size=True,
+                    demosaic_algorithm=rawpy.DemosaicAlgorithm.PPG
+                )
+
+            preview_original_image = Image.fromarray(rgb_image)
+
+            image = preview_original_image.copy()
+            image.thumbnail(
+                (270, 270),
+                Image.Resampling.LANCZOS
+            )
+
+            photo = ImageTk.PhotoImage(image)
+
+            preview_label.config(
+                image=photo,
+                text=""
+            )
+            preview_label.image = photo
+
+        except Exception as error:
+            preview_original_image = None
+            preview_label.config(
+                image="",
+                text=f"Could not preview image:\n{error}"
+            )
+            preview_label.image = None
+
+
+    def zoom_image_preview(event):
+        """Zoom into the image around the mouse pointer."""
+
+        if not zoom_enabled.get() or preview_original_image is None:
+            return
+
+        original_width, original_height = preview_original_image.size
+
+        preview_width = preview_label.winfo_width()
+        preview_height = preview_label.winfo_height()
+
+        if preview_width <= 0 or preview_height <= 0:
+            return
+
+        zoom_factor = 2
+
+        crop_width = int(original_width / zoom_factor)
+        crop_height = int(original_height / zoom_factor)
+
+        center_x = int(event.x / preview_width * original_width)
+        center_y = int(event.y / preview_height * original_height)
+
+        left = max(0, min(
+            center_x - crop_width // 2,
+            original_width - crop_width
+        ))
+
+        top = max(0, min(
+            center_y - crop_height // 2,
+            original_height - crop_height
+        ))
+
+        cropped_image = preview_original_image.crop((
+            left,
+            top,
+            left + crop_width,
+            top + crop_height
+        ))
+
+        cropped_image.thumbnail(
+            (270, 270),
+            Image.Resampling.LANCZOS
+        )
+
+        photo = ImageTk.PhotoImage(cropped_image)
+
+        preview_label.config(image=photo, text="")
+        preview_label.image = photo
 
     
     def refresh_file_list():
@@ -416,15 +596,75 @@ def main():
         selected_files.update(cr3_files)
         refresh_file_list()
 
+    
+
     def clear_files():
 
+        if not selected_files:
+            return
+
+        confirm = messagebox.askyesno(
+        "Clear All Photos",
+        "Are you sure you want to remove ALL selected photos?"
+        )
+
+        if not confirm:
+            return
+
         selected_files.clear()
+        file_status.clear()
+
+        nonlocal preview_original_image
+        preview_original_image = None
+
         refresh_file_list()
+
+        preview_label.config(
+            image="",
+            text="Select a photo to preview"
+        )
+        preview_label.image = None
+        
+    def remove_selected_files():
+
+        selected_indices = file_list.curselection()
+
+        if not selected_indices:
+            messagebox.showinfo(
+                "No photos selected",
+               "Please select one or more photos to remove."
+            )
+            return
+
+        sorted_files = sorted(
+            selected_files,
+            key=lambda path: (path.name.lower(), str(path).lower())
+        )
+
+        files_to_remove = [
+            sorted_files[index]
+            for index in selected_indices
+        ]
+
+        for file_path in files_to_remove:
+            selected_files.remove(file_path)
+            file_status.pop(file_path, None)
+
+        nonlocal preview_original_image
+        preview_original_image = None
+
+        refresh_file_list()
+
+        preview_label.config(
+            image="",
+            text="Select a photo to preview"
+        )
+        preview_label.image = None
 
     
     
     def start_conversion():
-        nonlocal conversion_running
+        nonlocal conversion_running, conversion_start_time
         
         files_to_convert = [
             file_path
@@ -501,8 +741,19 @@ def main():
         cancel_event.clear()
         conversion_running = True
 
+        conversion_start_time = __import__("time").time()
+        
+        estimated_time_label.config(
+            text="Estimated time remaining: Calculating..."
+        )
+        
         convert_button.config(state=tk.DISABLED)
         cancel_button.config(state=tk.NORMAL)
+        
+        add_files_button.config(state=tk.DISABLED)
+        add_folder_button.config(state=tk.DISABLED)
+        clear_files_button.config(state=tk.DISABLED)
+        remove_selected_button.config(state=tk.DISABLED)
 
         progress_bar["maximum"] = len(files_to_convert)
         progress_bar["value"] = 0
@@ -653,7 +904,7 @@ def main():
 
 
     def check_conversion_queue():
-        nonlocal conversion_running
+        nonlocal conversion_running, conversion_start_time
 
         try:
             while True:
@@ -703,6 +954,20 @@ def main():
                     refresh_file_list()
 
                     progress_bar["value"] = index
+                    
+                    elapsed_time = __import__("time").time() - conversion_start_time
+
+                    average_time = elapsed_time / index
+
+                    remaining_files = int(progress_bar["maximum"]) - index
+
+                    estimated_remaining = average_time * remaining_files
+
+                    minutes, seconds = divmod(int(estimated_remaining), 60)
+
+                    estimated_time_label.config(
+                        text=f"Estimated time remaining: {minutes:02d}:{seconds:02d}"
+                    )
 
                     status = "Converted" if success else "Failed"
 
@@ -714,9 +979,19 @@ def main():
                     _, successful, failures, cancelled, folder = message
 
                     conversion_running = False
+                    
 
                     convert_button.config(state=tk.NORMAL)
                     cancel_button.config(state=tk.DISABLED)
+                    
+                    add_files_button.config(state=tk.NORMAL)
+                    add_folder_button.config(state=tk.NORMAL)
+                    clear_files_button.config(state=tk.NORMAL)
+                    remove_selected_button.config(state=tk.NORMAL)
+                    
+                    estimated_time_label.config(
+                        text="Estimated time remaining: Complete"
+                    )
 
                     if cancelled:
                         status_label.config(text="Conversion cancelled.")
@@ -799,28 +1074,48 @@ def main():
     # --------------------------------------------------
     # Converter tab interface
     # --------------------------------------------------
-
+    
     button_frame = ttk.Frame(converter_tab)
-    button_frame.pack(pady=10)
+    button_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
 
-    ttk.Button(
-        button_frame,
+    # Left-side buttons
+    left_button_frame = ttk.Frame(button_frame)
+    left_button_frame.pack(side=tk.LEFT)
+
+    add_files_button = ttk.Button(
+        left_button_frame,
         text="Add Files",
         command=add_files
-    ).pack(side=tk.LEFT, padx=5)
+    )
+    add_files_button.pack(side=tk.LEFT, padx=5)
 
-    ttk.Button(
-        button_frame,
+    add_folder_button = ttk.Button(
+        left_button_frame,
         text="Add Folder",
         command=add_folder
-    ).pack(side=tk.LEFT, padx=5)
+    )
+    add_folder_button.pack(side=tk.LEFT, padx=5)
 
-    ttk.Button(
-        button_frame,
+    clear_files_button = ttk.Button(
+        left_button_frame,
         text="Clear Selection",
         command=clear_files
-    ).pack(side=tk.LEFT, padx=5)
+    )
+    clear_files_button.pack(side=tk.LEFT, padx=5)
 
+
+    # Right-side button
+    right_button_frame = ttk.Frame(button_frame)
+    right_button_frame.pack(side=tk.RIGHT)
+
+    remove_selected_button = ttk.Button(
+        right_button_frame,
+        text="Clear All",
+        command=remove_selected_files
+    )
+    remove_selected_button.pack(side=tk.RIGHT, padx=5)
+
+    
     # Selected photos section
     files_frame = ttk.LabelFrame(
         converter_tab,
@@ -836,8 +1131,16 @@ def main():
     files_frame.drop_target_register(DND_FILES)
     files_frame.dnd_bind("<<Drop>>", add_dropped_items)
 
+    # Photo list on the left
+    list_frame = ttk.Frame(files_frame)
+    list_frame.pack(
+        side=tk.LEFT,
+        fill=tk.BOTH,
+        expand=True
+    )
+
     file_list = tk.Listbox(
-        files_frame,
+        list_frame,
         font=("Segoe UI", 10),
         selectmode=tk.EXTENDED
     )
@@ -848,7 +1151,7 @@ def main():
     )
 
     scrollbar = ttk.Scrollbar(
-        files_frame,
+        list_frame,
         orient=tk.VERTICAL,
         command=file_list.yview
     )
@@ -857,6 +1160,62 @@ def main():
     file_list.config(
         yscrollcommand=scrollbar.set
     )
+    
+    file_list.bind(
+        "<<ListboxSelect>>",
+        show_image_preview
+    )
+
+    # Image preview on the right
+    preview_frame = ttk.LabelFrame(
+        files_frame,
+        text="Image Preview",
+        padding=10
+    )
+    preview_frame.configure(width=300, height=360)
+    preview_frame.pack_propagate(False)
+    
+    preview_frame.pack(
+        side=tk.RIGHT,
+        fill=tk.Y,
+        padx=(10, 0)
+    )
+    
+    zoom_toggle = ttk.Checkbutton(
+        preview_frame,
+        text="Enable hover zoom",
+        variable=zoom_enabled,
+        command=lambda: show_image_preview() if not zoom_enabled.get() else None
+    )
+
+    zoom_toggle.pack(
+        anchor=tk.W,
+        pady=(0, 5)
+    )
+
+    preview_label = ttk.Label(
+        preview_frame,
+        text="Select a photo to preview",
+        anchor=tk.CENTER,
+        justify=tk.CENTER
+    )
+    preview_label.configure(width=35)
+    
+    preview_label.pack(
+        fill=tk.BOTH,
+        expand=True
+    )
+    
+    preview_label.bind(
+        "<Motion>",
+        zoom_image_preview
+    )
+    
+    preview_label.bind(
+        "<Leave>",
+        show_image_preview
+    )
+
 
     file_count_label = ttk.Label(
         converter_tab,
@@ -886,6 +1245,12 @@ def main():
         text="Ready to convert."
     )
     status_label.pack(pady=5)
+    
+    estimated_time_label = ttk.Label(
+        converter_tab,
+        text="Estimated time remaining: --"
+    )
+    estimated_time_label.pack(pady=5)
 
     # Filename prefix
 
@@ -909,7 +1274,7 @@ def main():
     # Conversion buttons
 
     conversion_button_frame = ttk.Frame(converter_tab)
-    conversion_button_frame.pack(anchor=tk.E, pady=15)
+    conversion_button_frame.pack(fill=tk.X, padx=5, pady=15)
     
     open_folder_button = ttk.Button(
         conversion_button_frame,
@@ -918,20 +1283,20 @@ def main():
     )
     open_folder_button.pack(side=tk.LEFT, padx=5)
 
-    convert_button = ttk.Button(
-        conversion_button_frame,
-        text="Convert Images",
-        command=start_conversion
-    )
-    convert_button.pack(side=tk.LEFT, padx=5)
-
     cancel_button = ttk.Button(
         conversion_button_frame,
         text="Cancel",
         command=cancel_conversion,
         state=tk.DISABLED
     )
-    cancel_button.pack(side=tk.LEFT, padx=5)
+    cancel_button.pack(side=tk.RIGHT, padx=5)
+    
+    convert_button = ttk.Button(
+            conversion_button_frame,
+            text="Convert Images",
+            command=start_conversion
+        )
+    convert_button.pack(side=tk.RIGHT, padx=5)
     
     # --------------------------------------------------
     # History tab interface
@@ -1342,6 +1707,13 @@ def main():
         command=save_admin_settings
     )
     admin_save_button.pack(anchor=tk.W, pady=20)
+    
+    about_button = ttk.Button(
+        root,
+        text="About",
+        command=show_about
+    )
+    about_button.pack(anchor=tk.SE, padx=20, pady=(0, 8))
 
     # --------------------------------------------------
     # Start application
