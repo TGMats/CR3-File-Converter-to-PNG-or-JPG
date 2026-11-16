@@ -1,0 +1,7 @@
+{
+    "output_folder": "C:/Users/tmati/Pictures/CR3Output",
+    "output_format": "JPG",
+    "jpeg_quality": 95,
+    "png_compression": 1,
+    "max_workers": 5
+}
