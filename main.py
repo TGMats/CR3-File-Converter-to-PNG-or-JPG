@@ -291,7 +291,7 @@ def main():
         
         github_label = ttk.Label(
             about_window,
-            text="GitHub: TGMats/CR3-File-Converter",
+            text="GitHub: TGMats/Raw-Image-Converter",
             foreground="blue",
             cursor="hand2"
         )
@@ -300,7 +300,7 @@ def main():
         github_label.bind(
             "<Button-1>",
             lambda event: __import__("webbrowser").open(
-                "https://github.com/TGMats/CR3-File-Converter-to-PNG-or-JPG"
+                "https://github.com/TGMats/Raw-Image-Converter"
             )
         )
 
