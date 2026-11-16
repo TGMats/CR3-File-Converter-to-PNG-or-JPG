@@ -5,11 +5,6 @@ from PIL import Image
 from threading import Lock
 from pathlib import Path
 
-#benchmarking
-#import time
-
-
-
 output_path_lock = Lock()
 
 def get_unique_output_path(output_folder, filename, extension):
@@ -36,8 +31,8 @@ def get_unique_output_path(output_folder, filename, extension):
                 counter += 1
 
 
-def convert_cr3(input_path, output_folder, output_format, jpeg_quality=95, png_compression=1, filename_prefix=""):
-    """Convert one CR3 file into JPG or PNG."""
+def convert_raw(input_path, output_folder, output_format, jpeg_quality=95, png_compression=1, filename_prefix=""):
+    """Convert one RAW file into JPG or PNG."""
 
     input_path = Path(input_path)
     output_folder = Path(output_folder)
@@ -68,19 +63,7 @@ def convert_cr3(input_path, output_folder, output_format, jpeg_quality=95, png_c
 
     # Read and process the RAW image.
     try:
-        # Measure RAW file reading.
-        
-        #BENCH:
-        #read_start = time.perf_counter()
-
         with rawpy.imread(str(input_path)) as raw:
-            #BENCH:
-            #read_time = time.perf_counter() - read_start
-
-            # Measure RAW image processing.
-            #BENCH:
-            #process_start = time.perf_counter()
-
             rgb_image = raw.postprocess(
                 use_camera_wb=True,
                 output_bps=8,
@@ -88,15 +71,9 @@ def convert_cr3(input_path, output_folder, output_format, jpeg_quality=95, png_c
                 demosaic_algorithm=rawpy.DemosaicAlgorithm.PPG
             )
 
-            #BENCH:
-            #process_time = time.perf_counter() - process_start
-
         # Convert to Pillow image.
         image = Image.fromarray(rgb_image)
         
-        #BENCH:
-        #save_start = time.perf_counter()
-
         # Save using selected format.
         if output_format == "JPG":
             image.save(
@@ -110,16 +87,6 @@ def convert_cr3(input_path, output_folder, output_format, jpeg_quality=95, png_c
                 format="PNG",
                 compress_level=png_compression
             )
-            
-        #BENCH:
-        #save_time = time.perf_counter() - save_start
-
-        # print(
-        #     f"{input_path.name} | "
-        #     f"Read: {read_time:.2f}s | "
-        #     f"Processing: {process_time:.2f}s | "
-        #     f"Save: {save_time:.2f}s"
-        # )
 
         return output_path
 
@@ -127,4 +94,3 @@ def convert_cr3(input_path, output_folder, output_format, jpeg_quality=95, png_c
         output_path.unlink(missing_ok=True)
         raise
 
-    #return output_path

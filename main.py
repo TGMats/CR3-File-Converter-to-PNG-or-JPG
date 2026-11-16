@@ -3,9 +3,10 @@ import queue
 import os
 import sys
 import json
-from pathlib import Path
-from converter import convert_cr3
 import rawpy
+
+from pathlib import Path
+from converter import convert_raw
 from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -40,6 +41,12 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 
 SETTINGS_FILE = Path(__file__).parent / "settings.json"
 HISTORY_FILE = Path(__file__).parent / "history.json"
+
+SUPPORTED_RAW_FORMATS = {
+    ".cr3",  # Canon
+    ".raf",  # Fujifilm
+    ".arw"   # Sony
+}
 
 
 def load_settings():
@@ -102,7 +109,7 @@ def main():
 
     root = TkinterDnD.Tk()
 
-    root.title("CR3Converter")
+    root.title("RAW Image Converter")
 
     # Allow the window to resize
     root.resizable(True, True)
@@ -154,22 +161,23 @@ def main():
 
     title = ttk.Label(
         root,
-        text="CR3Converter",
+        text="RAW Image Converter",
         font=("Segoe UI", 22, "bold")
     )
     title.pack(pady=(20, 5))
 
     subtitle = ttk.Label(
         root,
-        text="Convert Canon RAW photos to JPG or PNG"
+        text="Convert RAW images to JPG or PNG locally"
     )
     subtitle.pack(pady=(0, 20))
     
     footer = ttk.Label(
         root,
-        text="Made by Tomás Matias © 2026",
+        text="Supports multiple camera RAW formats.\nMade by Tomás Matias © 2026",
         font=("Segoe UI", 8),
-        foreground="gray"
+        foreground="gray",
+        justify=tk.CENTER
     )
     footer.pack(side=tk.BOTTOM, pady=(0, 8))
 
@@ -248,14 +256,14 @@ def main():
     def show_about():
 
         about_window = tk.Toplevel(root)
-        about_window.title("About CR3Converter")
+        about_window.title("About RAW Image Converter")
         about_window.geometry("380x300")
         about_window.resizable(False, False)
         about_window.transient(root)
 
         about_title = ttk.Label(
             about_window,
-            text="CR3Converter",
+            text="RAW Image Converter",
             font=("Segoe UI", 20, "bold")
         )
         about_title.pack(pady=(25, 5))
@@ -269,7 +277,7 @@ def main():
 
         description_label = ttk.Label(
             about_window,
-            text="A desktop application for converting\nCanon RAW (CR3) photos into JPG or PNG.",
+            text="A desktop application for batch converting\ncamera RAW images into high-quality JPG or PNG files.",
             justify=tk.CENTER
         )
         description_label.pack(pady=15)
@@ -312,7 +320,7 @@ def main():
     zoom_enabled = tk.BooleanVar(value=True)
 
     def show_image_preview(event=None):
-        """Display a thumbnail of the selected CR3 image."""
+        """Display a thumbnail of the selected RAW image."""
 
         nonlocal preview_original_image
 
@@ -513,9 +521,12 @@ def main():
     def add_files():
 
         files = filedialog.askopenfilenames(
-            title="Select CR3 photos",
+            title="Select RAW photos",
             filetypes=[
-                ("Canon RAW files", "*.CR3 *.cr3"),
+                (
+                    "Supported RAW files",
+                    "*.CR3 *.cr3 *.RAF *.raf *.ARW *.arw"
+                ),
                 ("All files", "*.*")
             ]
         )
@@ -524,7 +535,7 @@ def main():
 
             file_path = Path(file)
 
-            if file_path.suffix.lower() == ".cr3":
+            if file_path.suffix.lower() in SUPPORTED_RAW_FORMATS:
                 selected_files.add(file_path)
 
                 # Give newly added files their default status.
@@ -543,14 +554,14 @@ def main():
 
                 path = Path(item)
 
-                if path.is_file() and path.suffix.lower() == ".cr3":
+                if path.is_file() and path.suffix.lower() in SUPPORTED_RAW_FORMATS:
                     added_files.add(path)
 
                 elif path.is_dir():
 
                     for file in path.rglob("*"):
 
-                        if file.is_file() and file.suffix.lower() == ".cr3":
+                        if file.is_file() and file.suffix.lower() in SUPPORTED_RAW_FORMATS:
                             added_files.add(file)
 
             new_files = added_files - selected_files
@@ -566,13 +577,13 @@ def main():
             else:
                 messagebox.showinfo(
                     "No new photos found",
-                    "No new CR3 photos were found in the dropped items."
+                    "No new photos were found in the dropped items."
                 )
         
     def add_folder():
 
         folder = filedialog.askdirectory(
-            title="Select folder containing CR3 photos"
+            title="Select folder containing the images you want to convert"
         )
 
         if not folder:
@@ -580,26 +591,28 @@ def main():
 
         folder_path = Path(folder)
 
-        cr3_files = [
+        raw_files = [
             file for file in folder_path.rglob("*")
             if file.is_file()
-            and file.suffix.lower() == ".cr3"
+            and file.suffix.lower() in SUPPORTED_RAW_FORMATS
         ]
 
-        if not cr3_files:
+        if not raw_files:
             messagebox.showinfo(
                 "No photos found",
-                "This folder does not contain any CR3 photos."
+                "This folder does not contain any supported photos."
             )
             return
 
-        selected_files.update(cr3_files)
+        selected_files.update(raw_files)
         refresh_file_list()
 
     
 
     def clear_files():
 
+        nonlocal preview_original_image
+        
         if not selected_files:
             return
 
@@ -614,7 +627,7 @@ def main():
         selected_files.clear()
         file_status.clear()
 
-        nonlocal preview_original_image
+        
         preview_original_image = None
 
         refresh_file_list()
@@ -626,6 +639,8 @@ def main():
         preview_label.image = None
         
     def remove_selected_files():
+        
+        nonlocal preview_original_image
 
         selected_indices = file_list.curselection()
 
@@ -650,7 +665,7 @@ def main():
             selected_files.remove(file_path)
             file_status.pop(file_path, None)
 
-        nonlocal preview_original_image
+        
         preview_original_image = None
 
         refresh_file_list()
@@ -675,7 +690,7 @@ def main():
         if not selected_files:
             messagebox.showwarning(
                 "No files selected",
-                "Please add some CR3 files first."
+                "Please add some supported image files first."
             )
             return
 
@@ -754,6 +769,8 @@ def main():
         add_folder_button.config(state=tk.DISABLED)
         clear_files_button.config(state=tk.DISABLED)
         remove_selected_button.config(state=tk.DISABLED)
+        
+        files_frame.drop_target_unregister()
 
         progress_bar["maximum"] = len(files_to_convert)
         progress_bar["value"] = 0
@@ -814,7 +831,7 @@ def main():
                     return False
 
                 future = executor.submit(
-                    convert_cr3,
+                    convert_raw,
                     input_path=file_path,
                     output_folder=folder,
                     output_format=output_format_value,
@@ -989,6 +1006,8 @@ def main():
                     clear_files_button.config(state=tk.NORMAL)
                     remove_selected_button.config(state=tk.NORMAL)
                     
+                    files_frame.drop_target_register(DND_FILES)
+                    
                     estimated_time_label.config(
                         text="Estimated time remaining: Complete"
                     )
@@ -1099,7 +1118,7 @@ def main():
     clear_files_button = ttk.Button(
         left_button_frame,
         text="Clear Selection",
-        command=clear_files
+        command=remove_selected_files
     )
     clear_files_button.pack(side=tk.LEFT, padx=5)
 
@@ -1111,7 +1130,7 @@ def main():
     remove_selected_button = ttk.Button(
         right_button_frame,
         text="Clear All",
-        command=remove_selected_files
+        command=clear_files
     )
     remove_selected_button.pack(side=tk.RIGHT, padx=5)
 
