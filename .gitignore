@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.py[cod]
+settings.json
+history.json
+test_output/

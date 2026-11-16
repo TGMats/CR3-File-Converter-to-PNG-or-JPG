@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from converter import convert_cr3
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from tkinterdnd2 import DND_FILES, TkinterDnD
 
 # --------------------------------------------------
 # Tcl / Tk configuration
@@ -36,6 +37,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 # --------------------------------------------------
 
 SETTINGS_FILE = Path(__file__).parent / "settings.json"
+HISTORY_FILE = Path(__file__).parent / "history.json"
 
 
 def load_settings():
@@ -70,14 +72,33 @@ def save_settings(settings):
     with open(SETTINGS_FILE, "w") as file:
         json.dump(settings, file, indent=4)
 
+def load_history():
+    """Load previous conversion history."""
 
+    if not HISTORY_FILE.exists():
+        return []
+
+    try:
+        with open(HISTORY_FILE, "r") as file:
+            return json.load(file)
+
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def save_history(history):
+    """Save conversion history to JSON."""
+
+    with open(HISTORY_FILE, "w") as file:
+        json.dump(history, file, indent=4)
+        
 # --------------------------------------------------
 # Main application
 # --------------------------------------------------
 
 def main():
 
-    root = tk.Tk()
+    root = TkinterDnD.Tk()
 
     root.title("CR3Converter")
 
@@ -92,6 +113,7 @@ def main():
     
     # Application data
     settings = load_settings()
+    history = load_history()
     selected_files = set()
     file_status = {}
     
@@ -151,10 +173,12 @@ def main():
 
     converter_tab = ttk.Frame(notebook, padding=15)
     settings_tab = ttk.Frame(notebook, padding=15)
+    history_tab = ttk.Frame(notebook, padding=15)
     admin_tab = ttk.Frame(notebook, padding=15)
 
     notebook.add(converter_tab, text="Converter")
     notebook.add(settings_tab, text="Settings")
+    notebook.add(history_tab, text="History")
     
     
     def unlock_admin():
@@ -174,7 +198,7 @@ def main():
 
             admin_unlocked = True
 
-            if not admin_tab.winfo_ismapped():
+            if str(admin_tab) not in notebook.tabs():
                 notebook.add(admin_tab, text="Admin")
 
             notebook.select(admin_tab)
@@ -287,13 +311,13 @@ def main():
     def update_conversion_summary():
 
         completed = sum(
-            1 for status in file_status.values()
-            if status == "Converted"
+            1 for file_path in selected_files
+            if file_status.get(file_path) == "Converted"
         )
 
         failed = sum(
-            1 for status in file_status.values()
-            if status == "Failed"
+            1 for file_path in selected_files
+            if file_status.get(file_path) == "Failed"
         )
 
         remaining = len(selected_files) - completed - failed
@@ -327,6 +351,43 @@ def main():
                 file_status[file_path] = "Waiting"
 
         refresh_file_list()
+        
+        
+    def add_dropped_items(event):
+
+            dropped_items = root.tk.splitlist(event.data)
+
+            added_files = set()
+
+            for item in dropped_items:
+
+                path = Path(item)
+
+                if path.is_file() and path.suffix.lower() == ".cr3":
+                    added_files.add(path)
+
+                elif path.is_dir():
+
+                    for file in path.rglob("*"):
+
+                        if file.is_file() and file.suffix.lower() == ".cr3":
+                            added_files.add(file)
+
+            new_files = added_files - selected_files
+
+            selected_files.update(new_files)
+
+            for file_path in new_files:
+                file_status[file_path] = "Waiting"
+
+            if new_files:
+                refresh_file_list()
+
+            else:
+                messagebox.showinfo(
+                    "No new photos found",
+                    "No new CR3 photos were found in the dropped items."
+                )
         
     def add_folder():
 
@@ -517,7 +578,7 @@ def main():
 
                 return True
 
-            # Initially submit only two photos.
+            # Initially submit up to the configured worker limit.
             for _ in range(max_workers_value):
                 if not submit_next():
                     break
@@ -534,15 +595,19 @@ def main():
 
                     file_path = pending.pop(future)
 
+                    output_path = None
+                    error_message = ""
+
                     try:
-                        future.result()
+                        output_path = future.result()
                         successful += 1
                         success = True
 
                     except Exception as error:
-                        failures.append((file_path.name, str(error)))
+                        error_message = str(error)
+                        failures.append((file_path.name, error_message))
                         success = False
-
+                    
                     completed += 1
                     completed_files.add(file_path)
 
@@ -550,9 +615,10 @@ def main():
                         "progress",
                         completed,
                         file_path,
-                        success
+                        success,
+                        output_path,
+                        error_message
                     ))
-
                 # If cancelled, stop submitting and cancel jobs
                 # that haven't started yet.
                 if cancel_event.is_set():
@@ -564,7 +630,7 @@ def main():
 
                 else:
 
-                    # Keep a maximum of two conversions in progress.
+                    # Keep the configured number of worker slots filled.
                     while len(pending) < max_workers_value:
 
                         if not submit_next():
@@ -608,12 +674,30 @@ def main():
 
                 elif message[0] == "progress":
                     
-                    _, index, file_path, success = message
+                    _, index, file_path, success, output_path, error_message = message
 
                     # Find the file associated with this result.
                     file_status[file_path] = (
                         "Converted" if success else "Failed"
                     )
+                    history_entry = {
+                        "date": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "original_file": file_path.name,
+                        "output_file": output_path.name if output_path else "",
+                        "format": output_format.get(),
+                        "status": "Success" if success else "Failed",
+                        "error": error_message
+                    }
+
+                    history.append(history_entry)
+
+                    try:
+                        save_history(history)
+
+                    except OSError as error:
+                        print(f"Could not save conversion history: {error}")
+                    
+                    refresh_history_table()
 
                     refresh_file_list()
 
@@ -677,9 +761,38 @@ def main():
             cancel_button.config(state=tk.DISABLED)
 
             status_label.config(
-                text="Cancelling after the current photo..."
+                text="Cancelling current conversions..."
             )
 
+
+    def open_output_folder():
+
+        folder = output_folder.get().strip()
+
+        if not folder:
+            messagebox.showwarning(
+                "No output folder",
+                "Please choose an output folder in Settings first."
+            )
+            return
+
+        folder_path = Path(folder)
+
+        if not folder_path.is_dir():
+            messagebox.showerror(
+                "Folder not found",
+                "The selected output folder does not exist."
+            )
+            return
+
+        try:
+            os.startfile(str(folder_path))
+
+        except OSError as error:
+            messagebox.showerror(
+                "Could not open folder",
+                f"An error occurred:\n{error}"
+            )
 
     # --------------------------------------------------
     # Converter tab interface
@@ -718,6 +831,8 @@ def main():
         padx=5,
         pady=15
     )
+    files_frame.drop_target_register(DND_FILES)
+    files_frame.dnd_bind("<<Drop>>", add_dropped_items)
 
     file_list = tk.Listbox(
         files_frame,
@@ -793,6 +908,13 @@ def main():
 
     conversion_button_frame = ttk.Frame(converter_tab)
     conversion_button_frame.pack(anchor=tk.E, pady=15)
+    
+    open_folder_button = ttk.Button(
+        conversion_button_frame,
+        text="Open Output Folder",
+        command=open_output_folder
+    )
+    open_folder_button.pack(side=tk.LEFT, padx=5)
 
     convert_button = ttk.Button(
         conversion_button_frame,
@@ -808,6 +930,165 @@ def main():
         state=tk.DISABLED
     )
     cancel_button.pack(side=tk.LEFT, padx=5)
+    
+    # --------------------------------------------------
+    # History tab interface
+    # --------------------------------------------------
+
+    history_title = ttk.Label(
+        history_tab,
+        text="Conversion History",
+        font=("Segoe UI", 14, "bold")
+    )
+    history_title.pack(anchor=tk.W, pady=(10, 15))
+
+    history_frame = ttk.Frame(history_tab)
+    history_frame.pack(fill=tk.BOTH, expand=True)
+
+    history_columns = (
+        "date",
+        "original",
+        "output",
+        "format",
+        "status",
+        "error"
+    )
+
+    history_tree = ttk.Treeview(
+        history_frame,
+        columns=history_columns,
+        show="headings"
+    )
+
+    history_tree.heading("date", text="Date")
+    history_tree.heading("original", text="Original File")
+    history_tree.heading("output", text="Output File")
+    history_tree.heading("format", text="Format")
+    history_tree.heading("status", text="Status")
+    history_tree.heading("error", text="Error")
+
+    history_tree.column("date", width=145, anchor=tk.W)
+    history_tree.column("original", width=160, anchor=tk.W)
+    history_tree.column("output", width=160, anchor=tk.W)
+    history_tree.column("format", width=65, anchor=tk.CENTER)
+    history_tree.column("status", width=80, anchor=tk.CENTER)
+    history_tree.column("error", width=250, anchor=tk.W)
+
+    history_scrollbar = ttk.Scrollbar(
+        history_frame,
+        orient=tk.VERTICAL,
+        command=history_tree.yview
+    )
+
+    history_tree.configure(
+        yscrollcommand=history_scrollbar.set
+    )
+
+    history_tree.pack(
+        side=tk.LEFT,
+        fill=tk.BOTH,
+        expand=True
+    )
+
+    history_scrollbar.pack(
+        side=tk.RIGHT,
+        fill=tk.Y
+    )
+    
+    
+    def refresh_history_table():
+
+        # Clear existing table entries.
+        for item in history_tree.get_children():
+            history_tree.delete(item)
+
+        # Display newest conversions first.
+        for entry in reversed(history):
+
+            status = entry.get("status", "Unknown")
+
+            history_tree.insert(
+                "",
+                tk.END,
+                values=(
+                    entry.get("date", ""),
+                    entry.get("original_file", ""),
+                    entry.get("output_file", ""),
+                    entry.get("format", ""),
+                    status,
+                    entry.get("error", "")
+                ),
+                tags=(status.lower(),)
+            )
+
+        # Colour successful and failed conversions.
+        history_tree.tag_configure(
+            "success",
+            foreground="green"
+        )
+
+        history_tree.tag_configure(
+            "failed",
+            foreground="red"
+        )
+
+
+    def clear_history():
+
+        if not history:
+            messagebox.showinfo(
+                "History is empty",
+                "There are no conversion records to clear."
+            )
+            return
+
+        confirm = messagebox.askyesno(
+            "Clear History",
+            "Are you sure you want to delete all conversion history?"
+        )
+
+        if not confirm:
+            return
+
+        previous_history = history.copy()
+        history.clear()
+
+        try:
+            save_history(history)
+
+        except OSError as error:
+            history.extend(previous_history)
+
+            messagebox.showerror(
+                "Clear failed",
+                f"Could not clear conversion history:\n{error}"
+            )
+            return
+
+        refresh_history_table()
+
+        messagebox.showinfo(
+            "History cleared",
+            "Conversion history has been cleared."
+        )
+
+
+    # Clear History button
+    history_button_frame = ttk.Frame(history_tab)
+    history_button_frame.pack(
+        fill=tk.X,
+        pady=(10, 0)
+    )
+
+    clear_history_button = ttk.Button(
+        history_button_frame,
+        text="Clear History",
+        command=clear_history
+    )
+    clear_history_button.pack(side=tk.RIGHT)
+
+    # Load existing history into the table.
+    refresh_history_table()
 
     # --------------------------------------------------
     # Settings tab functions
@@ -1060,9 +1341,9 @@ def main():
     )
     admin_save_button.pack(anchor=tk.W, pady=20)
 
-        # --------------------------------------------------
-        # Start application
-        # --------------------------------------------------
+    # --------------------------------------------------
+    # Start application
+    # --------------------------------------------------
 
     root.mainloop()
 
